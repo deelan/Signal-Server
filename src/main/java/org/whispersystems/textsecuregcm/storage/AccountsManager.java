@@ -110,7 +110,7 @@ public class AccountsManager {
   }
 
   private String getKey(String number) {
-    return Account.class.getSimpleName() + Account.MEMCACHE_VERION + number;
+    return Account.class.getSimpleName() + Account.MEMCACHE_VERSION + number;
   }
 
   private void memcacheSet(String number, Account account) {

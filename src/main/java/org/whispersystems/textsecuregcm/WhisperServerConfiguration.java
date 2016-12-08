@@ -17,6 +17,8 @@
 package org.whispersystems.textsecuregcm;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+
+import org.whispersystems.textsecuregcm.configuration.BillingConfiguration;
 import org.whispersystems.textsecuregcm.configuration.FederationConfiguration;
 import org.whispersystems.textsecuregcm.configuration.GraphiteConfiguration;
 import org.whispersystems.textsecuregcm.configuration.PushConfiguration;
@@ -110,6 +112,10 @@ public class WhisperServerConfiguration extends Configuration {
   @NotNull
   @JsonProperty
   private TurnConfiguration turn;
+  
+  @Valid
+  @JsonProperty
+  private BillingConfiguration billing;
 
 
   public WebsocketConfiguration getWebsocketConfiguration() {
@@ -168,6 +174,10 @@ public class WhisperServerConfiguration extends Configuration {
     return turn;
   }
 
+  public BillingConfiguration getBillingConfiguration() {
+    return billing;
+  }
+  
   public Map<String, Integer> getTestDevices() {
     Map<String, Integer> results = new HashMap<>();
 

@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit;
 
 public class Account {
 
-  public static final int MEMCACHE_VERION = 5;
+  public static final int MEMCACHE_VERSION = 6;
 
   @JsonProperty
   private String number;
@@ -41,6 +41,9 @@ public class Account {
 
   @JsonIgnore
   private Device authenticatedDevice;
+  
+  @JsonProperty
+  private String stripeCustomerId;
 
   public Account() {}
 
@@ -160,5 +163,13 @@ public class Account {
     }
 
     return lastSeen;
+  }
+  
+  public String getStripeCustomerId() {
+	  return stripeCustomerId;
+  }
+  
+  public void setStripeCustomerId(String customerId) {
+	  this.stripeCustomerId = customerId;
   }
 }
