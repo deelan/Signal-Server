@@ -17,14 +17,16 @@
 package org.whispersystems.textsecuregcm.storage;
 
 
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+
+import org.whispersystems.textsecuregcm.entities.BillingInfo;
+
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Optional;
-
-import java.util.HashSet;
-import java.util.Set;
-import java.util.concurrent.TimeUnit;
 
 public class Account {
 
@@ -44,6 +46,9 @@ public class Account {
   
   @JsonProperty
   private String stripeCustomerId;
+  
+  @JsonProperty
+  private BillingInfo billingInfo;
 
   public Account() {}
 
@@ -171,5 +176,13 @@ public class Account {
   
   public void setStripeCustomerId(String customerId) {
 	  this.stripeCustomerId = customerId;
+  }
+  
+  public BillingInfo getBillingInfo() {
+	  return billingInfo;
+  }
+  
+  public void setBillingInfo(BillingInfo billingInfo) {
+	  this.billingInfo = billingInfo;
   }
 }

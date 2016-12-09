@@ -1,7 +1,5 @@
 package org.whispersystems.textsecuregcm.entities;
 
-import javax.validation.constraints.NotNull;
-
 import org.hibernate.validator.constraints.NotEmpty;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -9,50 +7,20 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 public class ChargeAttributes {
 
 	@JsonProperty
-	@NotNull
-	private int amount;
-
+	@NotEmpty
+	private String sellerNumber;
+	
 	@JsonProperty
 	@NotEmpty
-	private String currency;
-
-	@JsonProperty
-	@NotEmpty
-	private String sourceToken;
-  
-	@JsonProperty
-	private String description;
-  
-	@JsonProperty
-	@NotEmpty
-	private String destinationId;
-
-	@JsonProperty
-	private String metadata;
+	private String sourceTokenId;
 
 	public ChargeAttributes() {}
 
-	public int getAmount() {
-		return amount;
+	public String getSellerNumber() {
+		return sellerNumber;
 	}
-
-	public String getCurrency() {
-		return currency;
-	}
-
-	public String getSourceToken() {
-		return sourceToken;
-	}
-
-	public String getDescription() {
-		return description;
-	}
-
-	public String getDestinationId() {
-		return destinationId;
-	}
-
-	public String getMetadata() {
-		return metadata;
+	
+	public String getSourceTokenId() {
+		return sourceTokenId;
 	}
 }

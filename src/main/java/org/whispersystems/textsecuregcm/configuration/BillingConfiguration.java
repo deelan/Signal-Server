@@ -31,18 +31,6 @@ public class BillingConfiguration {
   @JsonProperty
   private String revocationUrl;
   
-  @NotEmpty
-  @JsonProperty
-  private String baseApiUrl;
-
-  @NotEmpty
-  @JsonProperty
-  private String chargeUrl;
-  
-  @NotEmpty
-  @JsonProperty
-  private String customerUrl;
-  
   @NotNull
   @JsonProperty
   private double applicationFee;
@@ -69,18 +57,6 @@ public class BillingConfiguration {
 	
   public String getRevocationUrl() {
 	return revocationUrl;
-  }
-  
-  public String getBaseApiUrl() {
-	return baseApiUrl;
-  }
-  
-  public String getChargeUrl() {
-	return chargeUrl;
-  }
-  
-  public String getCustomerUrl() {
-	return customerUrl;
   }
   
   public double getApplicationFee() {

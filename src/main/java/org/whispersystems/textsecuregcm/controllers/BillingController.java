@@ -1,8 +1,8 @@
 package org.whispersystems.textsecuregcm.controllers;
 
 import java.io.IOException;
-import java.net.URLDecoder;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,15 +32,19 @@ import org.slf4j.LoggerFactory;
 import org.whispersystems.textsecuregcm.configuration.BillingConfiguration;
 import org.whispersystems.textsecuregcm.entities.BillingInfo;
 import org.whispersystems.textsecuregcm.entities.ChargeAttributes;
-import org.whispersystems.textsecuregcm.entities.Metadata;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.Device;
 
 import com.codahale.metrics.annotation.Timed;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Optional;
+import com.stripe.model.Charge;
+import com.stripe.model.Customer;
+import com.stripe.model.Product;
+import com.stripe.model.ProductCollection;
+import com.stripe.model.SKU;
+import com.stripe.net.RequestOptions;
 
 import io.dropwizard.auth.Auth;
 
@@ -55,9 +59,6 @@ public class BillingController {
 	private String baseAuthUrl;
 	private String tokenUrl;
 	private String revocationUrl;
-	private String baseApiUrl;
-	private String chargeUrl;
-	private String customerUrl;
 	private double applicationFee;
 	
 	public BillingController(BillingConfiguration config, AccountsManager accountsManager) {
@@ -67,9 +68,6 @@ public class BillingController {
 		this.baseAuthUrl = config.getBaseAuthUrl();
 		this.tokenUrl = config.getTokenUrl();
 		this.revocationUrl = config.getRevocationUrl();
-		this.baseApiUrl = config.getBaseApiUrl();
-		this.chargeUrl = config.getChargeUrl();
-		this.customerUrl = config.getCustomerUrl();
 		this.applicationFee = config.getApplicationFee();
 	}
 	
@@ -77,7 +75,7 @@ public class BillingController {
 	@GET
 	@Path("/auth/{authorization_code}")
 	@Produces(MediaType.APPLICATION_JSON)
-	public BillingInfo getBillingCredentials(@Auth Account account, @PathParam("authorization_code") String authorizationCode) {
+	public BillingInfo connectAccount(@Auth Account account, @PathParam("authorization_code") String authorizationCode) {
 		if (account.getAuthenticatedDevice().get().getId() != Device.MASTER_ID) {
 			throw new WebApplicationException(Response.Status.UNAUTHORIZED);
 		}
@@ -101,13 +99,50 @@ public class BillingController {
 	        }
 	        
 	        ObjectMapper mapper = new ObjectMapper();
-	        return mapper.readValue(json, BillingInfo.class);
+	        BillingInfo info = mapper.readValue(json, BillingInfo.class);
+	        
+	        account.setBillingInfo(info);
+	        accountsManager.update(account);
+	        
+	        return info;
         } catch (IOException e) {
         	// ignore
         	logger.error("Failed trying to parse JSON", e);
         }
         
         return null;
+	}
+	
+	@Timed
+	@GET
+	@Path("/products/{seller}")
+	@Produces(MediaType.APPLICATION_JSON)
+	public ProductCollection getProducts(@Auth Account account, @PathParam("seller") String seller) {
+		if (account.getAuthenticatedDevice().get().getId() != Device.MASTER_ID) {
+			throw new WebApplicationException(Response.Status.UNAUTHORIZED);
+		}
+
+        try {
+        	String sellerNumber = seller; //URLDecoder.decode(seller, "UTF-8");
+        	Optional<Account> sellerAccount = accountsManager.get(sellerNumber);
+	 		
+	 		if (!sellerAccount.isPresent()) {
+	 			String error = "Could not get seller Account!";
+	 			logger.error(error);
+	 			throw new WebApplicationException(Response.status(500).build());
+	 		}
+	 		
+	 		Account trueSellerAccount = sellerAccount.get();
+	        
+        	RequestOptions requestOptions = RequestOptions.builder().setApiKey(trueSellerAccount.getBillingInfo().getAccessToken()).build();
+      	
+        	ProductCollection products = Product.list(Collections.<String, Object>emptyMap(), requestOptions);
+        	
+        	return products;
+        } catch (Exception e) {
+        	logger.error("Failed trying to get products", e);
+        	throw new WebApplicationException(Response.status(400).build());
+        }
 	}
 	
 	@Timed
@@ -137,87 +172,68 @@ public class BillingController {
 
 	@Timed
 	@PUT
-	@Path("/charge")
+	@Path("/charge/{product_id}/{sku_id}")
 	@Produces(MediaType.APPLICATION_JSON)
 	@Consumes(MediaType.APPLICATION_JSON)
-	public Map<String, Object> performCharge(@Auth Account account, @Valid ChargeAttributes chargeAttributes) {
+	public Charge performCharge(@Auth Account account, @PathParam("product_id") String productId, @PathParam("sku_id") String skuId, @Valid ChargeAttributes chargeAttributes) {
 		if (account.getAuthenticatedDevice().get().getId() != Device.MASTER_ID) {
 			throw new WebApplicationException(Response.Status.UNAUTHORIZED);
 		}
 		
-		CloseableHttpClient httpclient = HttpClients.createDefault();
-		ObjectMapper mapper = new ObjectMapper();
 		try {
-			Metadata metaObj = mapper.readValue(chargeAttributes.getMetadata(), Metadata.class);
-	 		String contactNumber = URLDecoder.decode(metaObj.getContact(), "UTF-8");
-	 		
-	 		Optional<Account> payerAccount = accountsManager.get(contactNumber);
-	 		
-	 		if (!payerAccount.isPresent()) {
-	 	        // TODO: die hard
-	 			String error = "Could not get contact Account!";
-	 			logger.error(error);
-	 			throw new Exception(error);
-	 		}
-	 		
-	 		Account truePayerAccount = payerAccount.get();
+			// check if we have a customer ID and if not, create a new customer and use the new ID
+			String customerId = account.getStripeCustomerId();
 			
-			String customerId = truePayerAccount.getStripeCustomerId();
+			RequestOptions platformRequestOptions = RequestOptions.builder().setApiKey(apiKey).build();
 		
 			if (customerId == null) {
-	        	HttpPost customerPost = new HttpPost(baseApiUrl + customerUrl);
-	        	List<NameValuePair> customerParams = new ArrayList<>();
-	        	customerParams.add(new BasicNameValuePair("source", chargeAttributes.getSourceToken()));
-	        	customerParams.add(new BasicNameValuePair("description", "Customer for Signal contact: " + contactNumber));
-	
-	            customerPost.addHeader("Authorization", "Bearer " + apiKey);
-	            customerPost.setEntity(new UrlEncodedFormEntity(customerParams));
-	            
-	            CloseableHttpResponse customerResponse = httpclient.execute(customerPost);
-	              
-				TypeReference<HashMap<String,Object>> typeRef = new TypeReference<HashMap<String,Object>>() {};
-	
-				Map<String, Object> result = mapper.readValue(EntityUtils.toString(customerResponse.getEntity()), typeRef);
-				
-				if (result.get("error") != null) {
-					String error = "Could not get create customer for charge!";
-		 			logger.error(error + " - " + result.get("error") + " - " + result.get("error_description"));
-		 			throw new Exception(error);
-				}
-				
-	            customerId = (String)result.get("id");
-	            
-	            truePayerAccount.setStripeCustomerId(customerId);
-	            accountsManager.update(truePayerAccount);
-	        }
-		
-			List<NameValuePair> params = new ArrayList<>();
-			int amount = chargeAttributes.getAmount();
-	        params.add(new BasicNameValuePair("amount", String.valueOf(amount)));
-	        params.add(new BasicNameValuePair("currency", chargeAttributes.getCurrency()));
-	        params.add(new BasicNameValuePair("description", chargeAttributes.getDescription()));
-	        params.add(new BasicNameValuePair("destination", chargeAttributes.getDestinationId()));
-	        
-	        // TODO: automate adding of metadata fields?
-	        params.add(new BasicNameValuePair("metadata[contact]", metaObj.getContact()));
-	        params.add(new BasicNameValuePair("metadata[productId]", metaObj.getProductId()));
-	        params.add(new BasicNameValuePair("metadata[skuId]", metaObj.getSkuId()));
-	        params.add(new BasicNameValuePair("customer", customerId));
-	 		
-	        long appFee = Math.round(amount * applicationFee);
-	        params.add(new BasicNameValuePair("application_fee", String.valueOf(appFee)));
-	        
-	        HttpPost httpPost = new HttpPost(baseApiUrl + chargeUrl);
-	        httpPost.addHeader("Authorization", "Bearer " + apiKey);
-	        httpPost.setEntity(new UrlEncodedFormEntity(params));
-	        
-	        CloseableHttpResponse response = httpclient.execute(httpPost);
-	          
-			TypeReference<HashMap<String,Object>> typeRef = new TypeReference<HashMap<String,Object>>() {};
+				Map<String, Object> customerParams = new HashMap<String, Object>();
+				customerParams.put("source", chargeAttributes.getSourceTokenId());
+				customerParams.put("description", "Customer for Signal contact: " + account.getNumber());
 
-			Map<String, Object> result = mapper.readValue(EntityUtils.toString(response.getEntity()), typeRef);
+				Customer customer = Customer.create(customerParams, platformRequestOptions);
+	        	
+	            customerId = customer.getId();
+	            
+	            account.setStripeCustomerId(customerId);
+	            accountsManager.update(account);
+	        }
 			
-			return result;
+			String sellerNumber = chargeAttributes.getSellerNumber(); //URLDecoder.decode(chargeAttributes.getSellerNumber(), "UTF-8");
+	 		
+	 		Optional<Account> sellerAccount = accountsManager.get(sellerNumber);
+	 		
+	 		if (!sellerAccount.isPresent()) {
+	 			String error = "Could not get seller Account!";
+	 			logger.error(error);
+	 			throw new WebApplicationException(Response.status(500).build());
+	 		}
+	 		
+	 		Account trueSellerAccount = sellerAccount.get();
+	 		
+	 		// get the product/SKU to determine the cost
+	 		RequestOptions sellerRequestOptions = RequestOptions.builder().setApiKey(trueSellerAccount.getBillingInfo().getAccessToken()).build();
+	 		SKU sku = SKU.retrieve(skuId, sellerRequestOptions);
+			
+			Integer amount = sku.getPrice();
+		
+			// make the charge
+			Map<String, Object> chargeParams = new HashMap<String, Object>();
+			chargeParams.put("amount", String.valueOf(amount));
+			chargeParams.put("currency", "CAD");
+			chargeParams.put("description", String.format("Charge by Lemr on behalf of: %s", trueSellerAccount.getNumber()));
+			chargeParams.put("destination", trueSellerAccount.getBillingInfo().getStripeUserId());
+			chargeParams.put("customer", customerId);
+			chargeParams.put("metadata[contact]", account.getNumber());
+			chargeParams.put("metadata[productId]", productId);
+			chargeParams.put("metadata[skuId]", skuId);
+			
+			long appFee = Math.round(amount * applicationFee);
+	        chargeParams.put("application_fee", String.valueOf(appFee));
+						
+			Charge charge = Charge.create(chargeParams, platformRequestOptions);
+
+			return charge;
 		} catch (Exception e) {
 			logger.error("Exception trying to perform charge", e);
 			throw new WebApplicationException(Response.status(500).build());
