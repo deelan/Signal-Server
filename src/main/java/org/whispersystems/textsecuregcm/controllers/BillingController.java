@@ -133,10 +133,17 @@ public class BillingController {
 	 		}
 	 		
 	 		Account trueSellerAccount = sellerAccount.get();
+	 		
+	 		BillingInfo billingInfo = trueSellerAccount.getBillingInfo();
+	 		
+	 		if (billingInfo == null) {
+	 			return new ProductCollection();
+	 		}
 	        
         	RequestOptions requestOptions = RequestOptions.builder().setApiKey(trueSellerAccount.getBillingInfo().getAccessToken()).build();
       	
         	ProductCollection products = Product.list(Collections.<String, Object>emptyMap(), requestOptions);
+        	products.setRequestOptions(null);
         	
         	return products;
         } catch (Exception e) {
