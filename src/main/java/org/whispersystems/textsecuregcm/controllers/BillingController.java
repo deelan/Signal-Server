@@ -40,6 +40,7 @@ import com.codahale.metrics.annotation.Timed;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Optional;
 import com.stripe.model.Charge;
+import com.stripe.model.ChargeCollection;
 import com.stripe.model.Customer;
 import com.stripe.model.Product;
 import com.stripe.model.ProductCollection;
@@ -148,6 +149,46 @@ public class BillingController {
         	return products;
         } catch (Exception e) {
         	logger.error("Failed trying to get products", e);
+        	throw new WebApplicationException(Response.status(400).build());
+        }
+	}
+	
+	@Timed
+	@GET
+	@Path("/charges/{contactNumber}")
+	@Produces(MediaType.APPLICATION_JSON)
+	public ChargeCollection getCharges(@Auth Account account, @PathParam("contactNumber") String contactNumber) {
+		if (account.getAuthenticatedDevice().get().getId() != Device.MASTER_ID) {
+			throw new WebApplicationException(Response.Status.UNAUTHORIZED);
+		}
+
+        try {
+        	Optional<Account> contactAccount = accountsManager.get(contactNumber);
+	 		
+	 		if (!contactAccount.isPresent()) {
+	 			String error = "Could not get contact Account!";
+	 			logger.error(error);
+	 			throw new WebApplicationException(Response.status(500).build());
+	 		}
+	 		
+	 		Account trueContactAccount = contactAccount.get();
+	 		
+	 		String stripeCustomerId = trueContactAccount.getStripeCustomerId();
+	 		
+	 		if (stripeCustomerId == null) {
+	 			return new ChargeCollection();
+	 		}
+	        
+        	RequestOptions requestOptions = RequestOptions.builder().setApiKey(apiKey).build();
+        	Map<String, Object> chargeParams = new HashMap<String, Object>();
+        	chargeParams.put("customer", stripeCustomerId);
+      	
+        	ChargeCollection charges = Charge.list(chargeParams, requestOptions);
+        	charges.setRequestOptions(null);
+        	
+        	return charges;
+        } catch (Exception e) {
+        	logger.error("Failed trying to get charges", e);
         	throw new WebApplicationException(Response.status(400).build());
         }
 	}
