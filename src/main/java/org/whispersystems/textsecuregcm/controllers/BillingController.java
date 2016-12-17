@@ -39,12 +39,20 @@ import org.whispersystems.textsecuregcm.storage.Device;
 import com.codahale.metrics.annotation.Timed;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Optional;
+import com.stripe.exception.APIConnectionException;
+import com.stripe.exception.APIException;
+import com.stripe.exception.AuthenticationException;
+import com.stripe.exception.CardException;
+import com.stripe.exception.InvalidRequestException;
 import com.stripe.model.Charge;
 import com.stripe.model.ChargeCollection;
 import com.stripe.model.Customer;
+import com.stripe.model.Plan;
+import com.stripe.model.PlanCollection;
 import com.stripe.model.Product;
 import com.stripe.model.ProductCollection;
 import com.stripe.model.SKU;
+import com.stripe.model.Subscription;
 import com.stripe.net.RequestOptions;
 
 import io.dropwizard.auth.Auth;
@@ -194,6 +202,44 @@ public class BillingController {
 	}
 	
 	@Timed
+	@GET
+	@Path("/plans/{contactNumber}")
+	@Produces(MediaType.APPLICATION_JSON)
+	public PlanCollection getPlans(@Auth Account account, @PathParam("contactNumber") String contactNumber) {
+		if (account.getAuthenticatedDevice().get().getId() != Device.MASTER_ID) {
+			throw new WebApplicationException(Response.Status.UNAUTHORIZED);
+		}
+
+        try {
+        	Optional<Account> contactAccount = accountsManager.get(contactNumber);
+	 		
+	 		if (!contactAccount.isPresent()) {
+	 			String error = "Could not get contact Account!";
+	 			logger.error(error);
+	 			throw new WebApplicationException(Response.status(500).build());
+	 		}
+	 		
+	 		Account trueContactAccount = contactAccount.get();
+	 		
+	 		String accessToken = trueContactAccount.getBillingInfo().getAccessToken();
+	 		
+	 		if (accessToken == null) {
+	 			return new PlanCollection();
+	 		}
+	        
+        	RequestOptions requestOptions = RequestOptions.builder().setApiKey(accessToken).build();
+      	
+        	PlanCollection plans = Plan.list(Collections.<String, Object>emptyMap(), requestOptions);
+        	plans.setRequestOptions(null);
+        	
+        	return plans;
+        } catch (Exception e) {
+        	logger.error("Failed trying to get charges", e);
+        	throw new WebApplicationException(Response.status(400).build());
+        }
+	}
+	
+	@Timed
 	@DELETE
 	@Path("/auth/{user_id}")
 	public void revokeBillingAccess(@Auth Account account, @PathParam("user_id") String userId) {
@@ -235,17 +281,8 @@ public class BillingController {
 			RequestOptions platformRequestOptions = RequestOptions.builder().setApiKey(apiKey).build();
 		
 			if (customerId == null) {
-				Map<String, Object> customerParams = new HashMap<String, Object>();
-				customerParams.put("source", chargeAttributes.getSourceTokenId());
-				customerParams.put("description", "Customer for Signal contact: " + account.getNumber());
-
-				Customer customer = Customer.create(customerParams, platformRequestOptions);
-	        	
-	            customerId = customer.getId();
-	            
-	            account.setStripeCustomerId(customerId);
-	            accountsManager.update(account);
-	        }
+				customerId = createCustomer(chargeAttributes.getSourceTokenId(), account, platformRequestOptions);
+			}
 			
 			String sellerNumber = chargeAttributes.getSellerNumber(); //URLDecoder.decode(chargeAttributes.getSellerNumber(), "UTF-8");
 	 		
@@ -269,7 +306,7 @@ public class BillingController {
 			Map<String, Object> chargeParams = new HashMap<String, Object>();
 			chargeParams.put("amount", String.valueOf(amount));
 			chargeParams.put("currency", "CAD");
-			chargeParams.put("description", String.format("Charge by Lemr on behalf of: %s", trueSellerAccount.getNumber()));
+			chargeParams.put("description", String.format("Product: %s", chargeAttributes.getProductName()));
 			chargeParams.put("destination", trueSellerAccount.getBillingInfo().getStripeUserId());
 			chargeParams.put("customer", customerId);
 			chargeParams.put("metadata[contact]", account.getNumber());
@@ -286,5 +323,72 @@ public class BillingController {
 			logger.error("Exception trying to perform charge", e);
 			throw new WebApplicationException(Response.status(500).build());
 		}
+	}
+	
+	@Timed
+	@PUT
+	@Path("/subscribe/{plan_id}")
+	@Produces(MediaType.APPLICATION_JSON)
+	@Consumes(MediaType.APPLICATION_JSON)
+	public Subscription createSubscription(@Auth Account account, @PathParam("plan_id") String planId, @Valid ChargeAttributes chargeAttributes) {
+		if (account.getAuthenticatedDevice().get().getId() != Device.MASTER_ID) {
+			throw new WebApplicationException(Response.Status.UNAUTHORIZED);
+		}
+		
+		try {
+			// check if we have a customer ID and if not, create a new customer and use the new ID
+			String customerId = account.getStripeCustomerId();
+			
+			RequestOptions platformRequestOptions = RequestOptions.builder().setApiKey(apiKey).build();
+		
+			if (customerId == null) {
+				customerId = createCustomer(chargeAttributes.getSourceTokenId(), account, platformRequestOptions);
+	        }
+			
+			String sellerNumber = chargeAttributes.getSellerNumber(); //URLDecoder.decode(chargeAttributes.getSellerNumber(), "UTF-8");
+	 		
+	 		Optional<Account> sellerAccount = accountsManager.get(sellerNumber);
+	 		
+	 		if (!sellerAccount.isPresent()) {
+	 			String error = "Could not get seller Account!";
+	 			logger.error(error);
+	 			throw new WebApplicationException(Response.status(500).build());
+	 		}
+	 		
+	 		Account trueSellerAccount = sellerAccount.get();
+	 		
+			// create the subscription
+			Map<String, Object> subscriptionParams = new HashMap<String, Object>();
+			subscriptionParams.put("plan", planId);
+			subscriptionParams.put("customer", customerId);
+			subscriptionParams.put("metadata[contact]", account.getNumber());
+			
+			// application fee in the config is a double between 0 and 1
+			// here we multiply by 100 to make it a percentage between 1 and 100, as required by the Stripe API
+	        subscriptionParams.put("application_fee_percent", applicationFee * 100);
+						
+	        RequestOptions sellerRequestOptions = RequestOptions.builder().setApiKey(trueSellerAccount.getBillingInfo().getAccessToken()).build();
+			Subscription subscription = Subscription.create(subscriptionParams, sellerRequestOptions);
+
+			return subscription;
+		} catch (Exception e) {
+			logger.error("Exception trying to perform charge", e);
+			throw new WebApplicationException(Response.status(500).build());
+		}
+	}
+	
+	private String createCustomer(String sourceTokenId, Account account, RequestOptions requestOptions) throws AuthenticationException, APIException, APIConnectionException, InvalidRequestException, CardException {
+		Map<String, Object> customerParams = new HashMap<String, Object>();
+		customerParams.put("source", sourceTokenId);
+		customerParams.put("description", "Customer for Signal contact: " + account.getNumber());
+
+		Customer customer = Customer.create(customerParams, requestOptions);
+    	
+        String customerId = customer.getId();
+        
+        account.setStripeCustomerId(customerId);
+        accountsManager.update(account);
+        
+        return customerId;
 	}
 }

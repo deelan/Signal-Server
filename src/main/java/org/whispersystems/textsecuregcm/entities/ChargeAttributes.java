@@ -13,6 +13,9 @@ public class ChargeAttributes {
 	@JsonProperty
 	@NotEmpty
 	private String sourceTokenId;
+	
+	@JsonProperty
+	private String productName;
 
 	public ChargeAttributes() {}
 
@@ -22,5 +25,9 @@ public class ChargeAttributes {
 	
 	public String getSourceTokenId() {
 		return sourceTokenId;
+	}
+	
+	public String getProductName() {
+		return productName;
 	}
 }
