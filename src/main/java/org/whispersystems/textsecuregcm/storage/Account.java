@@ -45,7 +45,10 @@ public class Account {
   private Device authenticatedDevice;
   
   @JsonProperty
-  private String stripeCustomerId;
+  private String platformCustomerId;
+  
+  @JsonProperty
+  private String connectedCustomerId;
   
   @JsonProperty
   private BillingInfo billingInfo;
@@ -170,12 +173,20 @@ public class Account {
     return lastSeen;
   }
   
-  public String getStripeCustomerId() {
-	  return stripeCustomerId;
+  public String getPlatformCustomerId() {
+	  return platformCustomerId;
   }
   
-  public void setStripeCustomerId(String customerId) {
-	  this.stripeCustomerId = customerId;
+  public void setPlatformCustomerId(String customerId) {
+	  this.platformCustomerId = customerId;
+  }
+  
+  public String getConnectedCustomerId() {
+	  return connectedCustomerId;
+  }
+  
+  public void setConnectedCustomerId(String customerId) {
+	  this.connectedCustomerId = customerId;
   }
   
   public BillingInfo getBillingInfo() {

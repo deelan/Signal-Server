@@ -11,7 +11,6 @@ public class ChargeAttributes {
 	private String sellerNumber;
 	
 	@JsonProperty
-	@NotEmpty
 	private String sourceTokenId;
 	
 	@JsonProperty

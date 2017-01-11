@@ -53,6 +53,7 @@ import com.stripe.model.Product;
 import com.stripe.model.ProductCollection;
 import com.stripe.model.SKU;
 import com.stripe.model.Subscription;
+import com.stripe.model.Token;
 import com.stripe.net.RequestOptions;
 
 import io.dropwizard.auth.Auth;
@@ -163,6 +164,33 @@ public class BillingController {
 	
 	@Timed
 	@GET
+	@Path("/customer/ids")
+	@Produces(MediaType.APPLICATION_JSON)
+	public Map<String, String> getCustomerIds(@Auth Account account) {
+		if (account.getAuthenticatedDevice().get().getId() != Device.MASTER_ID) {
+			throw new WebApplicationException(Response.Status.UNAUTHORIZED);
+		}
+
+        try {
+        	Map<String, String> customerIds = new HashMap<>();
+        	
+        	if (account.getPlatformCustomerId() != null) {
+        		customerIds.put("platformCustomerId", account.getPlatformCustomerId());
+        	}
+        	
+        	if (account.getConnectedCustomerId() != null) {
+        		customerIds.put("connectedCustomerId", account.getConnectedCustomerId());
+        	}
+        	
+        	return customerIds;
+        } catch (Exception e) {
+        	logger.error("Failed trying to get customer IDs", e);
+        	throw new WebApplicationException(Response.status(400).build());
+        }
+	}
+	
+	@Timed
+	@GET
 	@Path("/charges/{contactNumber}")
 	@Produces(MediaType.APPLICATION_JSON)
 	public ChargeCollection getCharges(@Auth Account account, @PathParam("contactNumber") String contactNumber) {
@@ -181,7 +209,7 @@ public class BillingController {
 	 		
 	 		Account trueContactAccount = contactAccount.get();
 	 		
-	 		String stripeCustomerId = trueContactAccount.getStripeCustomerId();
+	 		String stripeCustomerId = trueContactAccount.getPlatformCustomerId();
 	 		
 	 		if (stripeCustomerId == null) {
 	 			return new ChargeCollection();
@@ -221,8 +249,14 @@ public class BillingController {
 	 		
 	 		Account trueContactAccount = contactAccount.get();
 	 		
-	 		String accessToken = trueContactAccount.getBillingInfo().getAccessToken();
+	 		BillingInfo billingInfo = trueContactAccount.getBillingInfo();
 	 		
+	 		if (billingInfo == null) {
+	 			return new PlanCollection();
+	 		}
+		 	
+	 		String accessToken = billingInfo.getAccessToken();
+		 		
 	 		if (accessToken == null) {
 	 			return new PlanCollection();
 	 		}
@@ -276,15 +310,15 @@ public class BillingController {
 		
 		try {
 			// check if we have a customer ID and if not, create a new customer and use the new ID
-			String customerId = account.getStripeCustomerId();
+			String customerId = account.getPlatformCustomerId();
 			
 			RequestOptions platformRequestOptions = RequestOptions.builder().setApiKey(apiKey).build();
 		
 			if (customerId == null) {
-				customerId = createCustomer(chargeAttributes.getSourceTokenId(), account, platformRequestOptions);
+				customerId = createCustomer(chargeAttributes.getSourceTokenId(), account, platformRequestOptions, true);
 			}
 			
-			String sellerNumber = chargeAttributes.getSellerNumber(); //URLDecoder.decode(chargeAttributes.getSellerNumber(), "UTF-8");
+			String sellerNumber = chargeAttributes.getSellerNumber();
 	 		
 	 		Optional<Account> sellerAccount = accountsManager.get(sellerNumber);
 	 		
@@ -336,16 +370,7 @@ public class BillingController {
 		}
 		
 		try {
-			// check if we have a customer ID and if not, create a new customer and use the new ID
-			String customerId = account.getStripeCustomerId();
-			
-			RequestOptions platformRequestOptions = RequestOptions.builder().setApiKey(apiKey).build();
-		
-			if (customerId == null) {
-				customerId = createCustomer(chargeAttributes.getSourceTokenId(), account, platformRequestOptions);
-	        }
-			
-			String sellerNumber = chargeAttributes.getSellerNumber(); //URLDecoder.decode(chargeAttributes.getSellerNumber(), "UTF-8");
+			String sellerNumber = chargeAttributes.getSellerNumber();
 	 		
 	 		Optional<Account> sellerAccount = accountsManager.get(sellerNumber);
 	 		
@@ -356,18 +381,38 @@ public class BillingController {
 	 		}
 	 		
 	 		Account trueSellerAccount = sellerAccount.get();
-	 		
+			RequestOptions sellerRequestOptions = RequestOptions.builder().setApiKey(trueSellerAccount.getBillingInfo().getAccessToken()).build();
+			
+			// check if we have a customer ID and if not, create a new customer and use the new ID
+			String connectedCustomerId = account.getConnectedCustomerId();
+						
+			if (connectedCustomerId == null) {
+				RequestOptions platformRequestOptions = RequestOptions.builder().setApiKey(apiKey).build();
+				
+				String platformCustomerId = account.getPlatformCustomerId();
+				
+				if (platformCustomerId == null) {
+					platformCustomerId = createCustomer(chargeAttributes.getSourceTokenId(), account, platformRequestOptions, true);
+				}
+				
+				// save the platform customer onto the connected account
+				Map<String, Object> tokenParams = new HashMap<String, Object>();
+				tokenParams.put("customer", platformCustomerId);
+				Token custToken = Token.create(tokenParams, sellerRequestOptions);
+					 		
+		 		connectedCustomerId = createCustomer(custToken.getId(), account, sellerRequestOptions, false);
+	        }
+			
 			// create the subscription
 			Map<String, Object> subscriptionParams = new HashMap<String, Object>();
 			subscriptionParams.put("plan", planId);
-			subscriptionParams.put("customer", customerId);
+			subscriptionParams.put("customer", connectedCustomerId);
 			subscriptionParams.put("metadata[contact]", account.getNumber());
 			
 			// application fee in the config is a double between 0 and 1
 			// here we multiply by 100 to make it a percentage between 1 and 100, as required by the Stripe API
 	        subscriptionParams.put("application_fee_percent", applicationFee * 100);
 						
-	        RequestOptions sellerRequestOptions = RequestOptions.builder().setApiKey(trueSellerAccount.getBillingInfo().getAccessToken()).build();
 			Subscription subscription = Subscription.create(subscriptionParams, sellerRequestOptions);
 
 			return subscription;
@@ -377,7 +422,7 @@ public class BillingController {
 		}
 	}
 	
-	private String createCustomer(String sourceTokenId, Account account, RequestOptions requestOptions) throws AuthenticationException, APIException, APIConnectionException, InvalidRequestException, CardException {
+	private String createCustomer(String sourceTokenId, Account account, RequestOptions requestOptions, boolean platform) throws AuthenticationException, APIException, APIConnectionException, InvalidRequestException, CardException {
 		Map<String, Object> customerParams = new HashMap<String, Object>();
 		customerParams.put("source", sourceTokenId);
 		customerParams.put("description", "Customer for Signal contact: " + account.getNumber());
@@ -386,7 +431,12 @@ public class BillingController {
     	
         String customerId = customer.getId();
         
-        account.setStripeCustomerId(customerId);
+        if (platform) {
+        	account.setPlatformCustomerId(customerId);
+        } else {
+        	account.setConnectedCustomerId(customerId);
+        }
+        
         accountsManager.update(account);
         
         return customerId;
