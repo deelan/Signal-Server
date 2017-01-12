@@ -316,6 +316,12 @@ public class BillingController {
 		
 			if (customerId == null) {
 				customerId = createCustomer(chargeAttributes.getSourceTokenId(), account, platformRequestOptions, true);
+			} else {
+				// if we've passed a new token, the user has entered a new card (or fixed an error) so update the source in the customer
+				String tokenId = chargeAttributes.getSourceTokenId();
+				if (tokenId != null && !tokenId.equals("")) {
+					updateCustomer(customerId, tokenId, platformRequestOptions);
+				}
 			}
 			
 			String sellerNumber = chargeAttributes.getSellerNumber();
@@ -353,6 +359,9 @@ public class BillingController {
 			Charge charge = Charge.create(chargeParams, platformRequestOptions);
 
 			return charge;
+		} catch (CardException ce) {
+			logger.error("Charge failed.", ce);
+			throw new WebApplicationException(Response.status(ce.getStatusCode()).entity(String.format("{\"code\": \"%s\", \"decline_code\": \"%s\"}", ce.getCode(), ce.getDeclineCode())).type(MediaType.APPLICATION_JSON).build());
 		} catch (Exception e) {
 			logger.error("Exception trying to perform charge", e);
 			throw new WebApplicationException(Response.status(500).build());
@@ -393,6 +402,12 @@ public class BillingController {
 				
 				if (platformCustomerId == null) {
 					platformCustomerId = createCustomer(chargeAttributes.getSourceTokenId(), account, platformRequestOptions, true);
+				} else {
+					// if we've passed a new token, the user has entered a new card (or fixed an error) so update the source in the customer
+					String tokenId = chargeAttributes.getSourceTokenId();
+					if (tokenId != null && !tokenId.equals("")) {
+						updateCustomer(platformCustomerId, tokenId, platformRequestOptions);
+					}
 				}
 				
 				// save the platform customer onto the connected account
@@ -401,6 +416,12 @@ public class BillingController {
 				Token custToken = Token.create(tokenParams, sellerRequestOptions);
 					 		
 		 		connectedCustomerId = createCustomer(custToken.getId(), account, sellerRequestOptions, false);
+	        } else {
+	        	// if we've passed a new token, the user has entered a new card (or fixed an error) so update the source in the customer
+				String tokenId = chargeAttributes.getSourceTokenId();
+				if (tokenId != null && !tokenId.equals("")) {
+					updateCustomer(connectedCustomerId, tokenId, sellerRequestOptions);
+				}
 	        }
 			
 			// create the subscription
@@ -416,6 +437,9 @@ public class BillingController {
 			Subscription subscription = Subscription.create(subscriptionParams, sellerRequestOptions);
 
 			return subscription;
+		} catch (CardException ce) {
+			logger.error("Charge failed.", ce);
+			throw new WebApplicationException(Response.status(ce.getStatusCode()).entity(String.format("{\"code\": \"%s\", \"decline_code\": \"%s\"}", ce.getCode(), ce.getDeclineCode())).type(MediaType.APPLICATION_JSON).build());
 		} catch (Exception e) {
 			logger.error("Exception trying to perform charge", e);
 			throw new WebApplicationException(Response.status(500).build());
@@ -440,5 +464,14 @@ public class BillingController {
         accountsManager.update(account);
         
         return customerId;
+	}
+	
+	private void updateCustomer(String customerId, String sourceTokenId, RequestOptions requestOptions) throws AuthenticationException, APIException, APIConnectionException, InvalidRequestException, CardException {
+		Customer cust = Customer.retrieve(customerId, requestOptions);
+		
+		Map<String, Object> updateParams = new HashMap<String, Object>();
+		updateParams.put("source", sourceTokenId);
+
+		cust.update(updateParams, requestOptions);
 	}
 }
